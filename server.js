@@ -147,6 +147,28 @@ async function run() {
       res.send(result);
     });
 
+    //Admin Reject Loan
+    app.patch(
+      "/loans/:id/reject",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+
+        const updatedDoc = {
+          $set: {
+            status: "rejected",
+            rejectedAt: new Date(),
+          },
+        };
+        const result = await loanCollection.updateOne(
+          { _id: new ObjectId(id) },
+          updatedDoc
+        );
+        res.send(result);
+      }
+    );
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
