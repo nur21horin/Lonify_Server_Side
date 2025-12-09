@@ -5,6 +5,7 @@ const cookieParser = require("cookie-parser");
 const dotenv = require("dotenv");
 const { MongoClient, ServerApiVersion, Admin } = require("mongodb");
 const { connect } = require("mongoose");
+const crypto = require("crypto");
 
 const PORT = process.env.PORT || 5000;
 dotenv.config();
@@ -31,6 +32,19 @@ const verifyFBToken = async (req, res, next) => {
   }
 };
 
+const verifyAdmin = async (req, res, next) => {
+  const user = await userCollection.findOne({ email: req.decoded_email });
+  if (!user || user.role !== "admin")
+    return res.status(403).send({ message: "Forbidden" });
+  next();
+};
+const verifyManager = async (req, res, next) => {
+  const user = await userCollection.findOne({ email: req.decoded_email });
+  if (!user || user.role !== "manager")
+    return res.status(403).send({ message: "Forbidden" });
+  next();
+};
+
 // MongoDB connection
 const username = encodeURIComponent(process.env.DB_Name);
 const password = encodeURIComponent(process.env.DB_PASSWORD);
@@ -52,6 +66,9 @@ function generateLoanId() {
   const random = crypto.randomBytes(3).toString("hex").toUpperCase();
   return `${prefix}-${random}`;
 }
+function generateApplicationId() {
+  return "APP-" + crypto.randomBytes(4).toString("hex").toUpperCase();
+}
 
 async function run() {
   try {
@@ -61,6 +78,7 @@ async function run() {
     const db = client.db("lonlink_db");
     const userCollection = db.collection("users");
     const loanCollection = db.collection("loans");
+    const loanAppCollection = db.collection("loanApplications");
 
     //verifyAdmin
     const verifyAdmin = async (req, res, next) => {
@@ -105,6 +123,10 @@ async function run() {
     app.get("/users/:email/role", async (req, res) => {
       const email = req.params.email;
       const user = await userCollection.findOne({ email });
+      res.send({ role: user?.role || "user" });
+    });
+    app.get("/users/:email/role", async (req, res) => {
+      const user = await userCollection.findOne({ email: req.params.email });
       res.send({ role: user?.role || "user" });
     });
 
