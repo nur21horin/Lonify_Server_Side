@@ -127,6 +127,11 @@ async function run() {
       res.send(result);
     });
 
+    //Admin:Approve Loan
+    app.patch("/loans/:id/approve",verifyFBToken,async(req,res)=>{
+      
+    })
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
