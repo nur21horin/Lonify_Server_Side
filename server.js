@@ -120,17 +120,32 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/loans",verifyFBToken,async(req,res)=>{
-      const email=req.query.email;
-      const query=email?{userEmail:email}:{};
-      const result=await loanCollection.find(query).sort({createdAt:-1}).toArray();
+    app.get("/loans", verifyFBToken, async (req, res) => {
+      const email = req.query.email;
+      const query = email ? { userEmail: email } : {};
+      const result = await loanCollection
+        .find(query)
+        .sort({ createdAt: -1 })
+        .toArray();
       res.send(result);
     });
 
     //Admin:Approve Loan
-    app.patch("/loans/:id/approve",verifyFBToken,async(req,res)=>{
-      
-    })
+    app.patch("/loans/:id/approve", verifyFBToken, async (req, res) => {
+      const id = req.params.id;
+
+      const updatedDoc = {
+        $set: {
+          status: "approved",
+          approvedAt: new Date(),
+        },
+      };
+      const result = await loanCollection.updateOne(
+        { _id: new ObjectId(id) },
+        updatedDoc
+      );
+      res.send(result);
+    });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
