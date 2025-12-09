@@ -5,6 +5,7 @@ const cookieParser = require("cookie-parser");
 const dotenv = require("dotenv");
 const { MongoClient, ServerApiVersion, Admin } = require("mongodb");
 const { connect } = require("mongoose");
+
 const PORT = process.env.PORT || 5000;
 dotenv.config();
 const app = express();
@@ -15,21 +16,20 @@ app.use(express.json());
 app.use(cookieParser());
 
 //Verify Firebase Token (User Authentication)
-const verifyFBToken=async(req,res,next)=>{
-  const token=req.headers.authorization;
+const verifyFBToken = async (req, res, next) => {
+  const token = req.headers.authorization;
 
-  if(!token) return res.status(401).send({message:"unauthorized access"});
+  if (!token) return res.status(401).send({ message: "unauthorized access" });
 
-  try{
-    const idToken=token.split(" ")[1];
-    const decoded=await Admin.auth().verifyIdToken(idToken);
-    req.decoded_email=decoded.email;
+  try {
+    const idToken = token.split(" ")[1];
+    const decoded = await Admin.auth().verifyIdToken(idToken);
+    req.decoded_email = decoded.email;
     next();
-  }catch(err){
-    return res.status(401).send({message:'unauthorized access'});
+  } catch (err) {
+    return res.status(401).send({ message: "unauthorized access" });
   }
 };
-
 
 // MongoDB connection
 const username = encodeURIComponent(process.env.DB_Name);
@@ -47,9 +47,9 @@ const client = new MongoClient(uri, {
 });
 
 //Genarate Loan Tracing ID
-function generateLoanId(){
-  const prefix="LOAN";
-  const random=crypto.randomBytes(3).toString("hex").toUpperCase();
+function generateLoanId() {
+  const prefix = "LOAN";
+  const random = crypto.randomBytes(3).toString("hex").toUpperCase();
   return `${prefix}-${random}`;
 }
 
@@ -62,7 +62,6 @@ async function run() {
     const userCollection = db.collection("users");
     const loanCollection = db.collection("loans");
 
-    
     //verifyAdmin
     const verifyAdmin = async (req, res, next) => {
       const email = req.decoded_email;
@@ -76,7 +75,7 @@ async function run() {
     };
 
     //users related APi
-    app.get("/users",verifyFBToken, async (req, res) => {
+    app.get("/users", verifyFBToken, async (req, res) => {
       const searchText = req.query.searchText;
       const query = {};
       if (searchText) {
@@ -94,7 +93,34 @@ async function run() {
       res.send(result);
     });
 
+    app.post("/users", async (req, res) => {
+      const user = req.body;
+      user.role = "user";
+      user.createdAt = new Date();
+
+      const exist = await userCollection.findOne({ email: user.email });
+      const result = await userCollection.insertOne(user);
+      res.send(result);
+    });
+    app.get("/users/:email/role", async (req, res) => {
+      const email = req.params.email;
+      const user = await userCollection.findOne({ email });
+      res.send({ role: user?.role || "user" });
+    });
+
+    //loans
+    app.post("/loans", verifyFBToken, async (req, res) => {
+      const loan = req.body;
+
+      loan.loanId = generateLoanId();
+      loan.createdAt = new Date();
+      loan.status = "pending";
+
+      const result = await loanCollection.insertOne(loan);
+      res.send(result);
+    });
     
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
