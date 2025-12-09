@@ -125,32 +125,81 @@ async function run() {
       const user = await userCollection.findOne({ email });
       res.send({ role: user?.role || "user" });
     });
-    app.get("/users/:email/role", async (req, res) => {
-      const user = await userCollection.findOne({ email: req.params.email });
-      res.send({ role: user?.role || "user" });
-    });
+    app.patch(
+      "/users/:email/role",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const { role } = req.body;
+        const result = await userCollection.updateOne(
+          { email: req.params.email },
+          { $set: { role } }
+        );
+        res.send(result);
+      }
+    );
+
+    app.patch(
+      "/users/:email/suspend",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const { reason } = req.body;
+        const result = await userCollection.updateOne(
+          { email: req.params.email },
+          { $set: { status: "suspended", suspendReason: reason } }
+        );
+        res.send(result);
+      }
+    );
 
     //loans
-    app.post("/loans", verifyFBToken, async (req, res) => {
+    app.post("/loans", verifyFBToken, verifyManager, async (req, res) => {
       const loan = req.body;
-
       loan.loanId = generateLoanId();
       loan.createdAt = new Date();
-      loan.status = "pending";
-
+      loan.createdBy = req.decoded_email;
+      loan.status = "active";
       const result = await loanCollection.insertOne(loan);
       res.send(result);
     });
 
     app.get("/loans", verifyFBToken, async (req, res) => {
-      const email = req.query.email;
-      const query = email ? { userEmail: email } : {};
-      const result = await loanCollection
-        .find(query)
+      const loans = await loanCollection
+        .find()
         .sort({ createdAt: -1 })
         .toArray();
+      res.send(loans);
+    });
+
+    app.patch("/loans/:id", verifyFBToken, verifyManager, async (req, res) => {
+      const result = await loanCollection.updateOne(
+        { _id: new ObjectId(req.params.id) },
+        { $set: req.body }
+      );
       res.send(result);
     });
+
+    app.delete("/loans/:id", verifyFBToken, verifyAdmin, async (req, res) => {
+      const result = await loanCollection.deleteOne({
+        _id: new ObjectId(req.params.id),
+      });
+      res.send(result);
+    });
+
+    app.patch(
+      "/loans/:id/show",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const { showOnHome } = req.body;
+        const result = await loanCollection.updateOne(
+          { _id: new ObjectId(req.params.id) },
+          { $set: { showOnHome } }
+        );
+        res.send(result);
+      }
+    );
 
     //Admin:Approve Loan
     app.patch("/loans/:id/approve", verifyFBToken, async (req, res) => {
@@ -186,6 +235,73 @@ async function run() {
         const result = await loanCollection.updateOne(
           { _id: new ObjectId(id) },
           updatedDoc
+        );
+        res.send(result);
+      }
+    );
+
+    // --- Loan Applications Routes ---
+    app.post("/loan-applications", verifyFBToken, async (req, res) => {
+      const appData = req.body;
+      appData.applicationId = generateApplicationId();
+      appData.userEmail = req.decoded_email;
+      appData.status = "pending";
+      appData.applicationFeeStatus = "unpaid";
+      appData.createdAt = new Date();
+      const result = await loanAppCollection.insertOne(appData);
+      res.send(result);
+    });
+
+    app.get("/loan-applications", verifyFBToken, async (req, res) => {
+      let query = {};
+      if (req.query.status) query.status = req.query.status;
+      const apps = await loanAppCollection
+        .find(query)
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.send(apps);
+    });
+
+    app.patch(
+      "/loan-applications/:id/approve",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const result = await loanAppCollection.updateOne(
+          { _id: new ObjectId(req.params.id) },
+          { $set: { status: "approved", approvedAt: new Date() } }
+        );
+        res.send(result);
+      }
+    );
+
+    app.patch(
+      "/loan-applications/:id/reject",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const result = await loanAppCollection.updateOne(
+          { _id: new ObjectId(req.params.id) },
+          { $set: { status: "rejected", rejectedAt: new Date() } }
+        );
+        res.send(result);
+      }
+    );
+
+    app.patch(
+      "/loan-applications/:id/cancel",
+      verifyFBToken,
+      async (req, res) => {
+        const appData = await loanAppCollection.findOne({
+          _id: new ObjectId(req.params.id),
+        });
+        if (appData.userEmail !== req.decoded_email)
+          return res.status(403).send({ message: "Forbidden" });
+        if (appData.status !== "pending")
+          return res.status(400).send({ message: "Cannot cancel" });
+        const result = await loanAppCollection.updateOne(
+          { _id: new ObjectId(req.params.id) },
+          { $set: { status: "canceled" } }
         );
         res.send(result);
       }
