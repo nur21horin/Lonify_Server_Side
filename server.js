@@ -3,12 +3,29 @@ const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const dotenv = require("dotenv");
-const { MongoClient, ServerApiVersion, Admin } = require("mongodb");
+dotenv.config();
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+
+//const { MongoClient, ServerApiVersion, Admin } = require("mongodb");
 const { connect } = require("mongoose");
 const crypto = require("crypto");
+const jwt = require("jsonwebtoken");
+
+//Firebase
+const admin = require("firebase-admin");
+
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+
+serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
+module.exports = admin;
 
 const PORT = process.env.PORT || 5000;
-dotenv.config();
+
 const app = express();
 
 // Middleware
@@ -16,19 +33,74 @@ app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
 
-//Verify Firebase Token (User Authentication)
-const verifyFBToken = async (req, res, next) => {
-  const token = req.headers.authorization;
+app.post("/jwt", async (req, res) => {
+  const user = req.body;
+  const token = jwt.sign(user, process.env.JWT_SECRET, {
+    expiresIn: "7d",
+  });
 
-  if (!token) return res.status(401).send({ message: "unauthorized access" });
+  res.cookie("token", token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "none",
+  });
 
-  try {
-    const idToken = token.split(" ")[1];
-    const decoded = await Admin.auth().verifyIdToken(idToken);
+  res.send({ success: true });
+});
+
+const verifyJWT = (req, res, next) => {
+  const token = req.cookies?.token;
+  if (!token) return res.status(401).send({ message: "Unauthorized" });
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) return res.status(403).send({ message: "Forbidden" });
     req.decoded_email = decoded.email;
     next();
-  } catch (err) {
-    return res.status(401).send({ message: "unauthorized access" });
+  });
+};
+
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+
+app.post("/create-payment-intent", verifyJWT, async (req, res) => {
+  const paymentIntent = await stripe.paymentIntents.create({
+    amount: 1000, // $10
+    currency: "usd",
+    payment_method_types: ["card"],
+  });
+
+  res.send({ clientSecret: paymentIntent.client_secret });
+});
+
+app.patch("/loan-applications/:id/pay", verifyJWT, async (req, res) => {
+  const result = await loanAppCollection.updateOne(
+    { _id: new ObjectId(req.params.id) },
+    {
+      $set: {
+        applicationFeeStatus: "paid",
+        transactionId: req.body.transactionId,
+        paidAt: new Date(),
+      },
+    }
+  );
+  res.send(result);
+});
+
+//Verify Firebase Token (User Authentication)
+const verifyFBToken = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader) {
+    return res.status(401).send({ message: "Unauthorized" });
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  try {
+    const decodedUser = await admin.auth().verifyIdToken(token);
+    req.decoded_email = decodedUser.email;
+    next();
+  } catch (error) {
+    return res.status(401).send({ message: "Invalid token" });
   }
 };
 
@@ -91,24 +163,138 @@ async function run() {
       }
       next();
     };
-
-    //users related APi
-    app.get("/users", verifyFBToken, async (req, res) => {
-      const searchText = req.query.searchText;
-      const query = {};
-      if (searchText) {
-        query.$or = [
-          { displayName: { $regex: searchText, $options: "i" } },
-          { email: { $regex: searchText, $options: "i" } },
-        ];
+    const verifyManager = async (req, res, next) => {
+      const email = req.decoded_email;
+      const user = await userCollection.findOne({ email });
+      if (!user || user.role !== "manager") {
+        return res
+          .status(403)
+          .send({ message: "Forbidden: Manager access required" });
       }
+      next();
+    };
 
-      const cursor = userCollection
-        .find(query)
+    app.get("/public/loans", async (req, res) => {
+      try {
+        const loans = await loanCollection
+          .find({ showOnHome: true })
+          .limit(6)
+          .sort({ createdAt: -1 })
+          .toArray();
+        res.send(loans);
+      } catch (error) {
+        res.status(500).send({ message: "Failed to fetch public loans" });
+      }
+    });
+    app.get("/loans", verifyFBToken, async (req, res) => {
+      const loans = await loanCollection
+        .find()
         .sort({ createdAt: -1 })
-        .limit(6);
-      const result = await cursor.toArray();
+        .toArray();
+      res.send(loans);
+    });
+    app.get("/loans/:id", verifyFBToken, async (req, res) => {
+      try {
+        const loan = await loanCollection.findOne({
+          _id: new ObjectId(req.params.id),
+        });
+        if (!loan) return res.status(404).send({ message: "Loan not found" });
+        res.send(loan);
+      } catch (error) {
+        res.status(500).send({ message: "Failed to fetch loan details" });
+      }
+    });
+
+    app.post("/loans", verifyFBToken, verifyManager, async (req, res) => {
+      const loan = req.body;
+      loan.loanId = generateLoanId();
+      loan.createdAt = new Date();
+      loan.createdBy = req.decoded_email;
+      loan.status = "active";
+      const result = await loanCollection.insertOne(loan);
       res.send(result);
+    });
+
+    app.get(
+      "/manager/loans",
+      verifyFBToken,
+      verifyManager,
+      async (req, res) => {
+        try {
+          const loans = await loanCollection
+            .find({ createdBy: req.decoded_email }) 
+            .sort({ createdAt: -1 })
+            .toArray();
+          res.send(loans);
+        } catch (error) {
+          res.status(500).send({ message: "Failed to fetch manager's loans" });
+        }
+      }
+    );
+    app.patch("/loans/:id", verifyFBToken, verifyManager, async (req, res) => {
+      const result = await loanCollection.updateOne(
+        { _id: new ObjectId(req.params.id) },
+        { $set: req.body }
+      );
+      res.send(result);
+    });
+
+    app.patch(
+      "/loan-applications/:id/approve",
+      verifyFBToken,
+      verifyManager,
+      async (req, res) => {
+        const id = req.params.id;
+
+        const updatedDoc = {
+          $set: {
+            status: "approved",
+            approvedAt: new Date(),
+          },
+        };
+        const result = await loanAppCollection.updateOne(
+          { _id: new ObjectId(id) },
+          updatedDoc
+        );
+        res.send(result);
+      }
+    );
+
+    app.patch(
+      "/loan-applications/:id/reject",
+      verifyFBToken,
+      verifyManager,
+      async (req, res) => {
+        const id = req.params.id;
+
+        const updatedDoc = {
+          $set: {
+            status: "rejected",
+            rejectedAt: new Date(),
+          },
+        };
+        const result = await loanAppCollection.updateOne(
+          { _id: new ObjectId(id) },
+          updatedDoc
+        );
+        res.send(result);
+      }
+    );
+    //users related APi
+    app.get("/users", verifyJWT, verifyAdmin, async (req, res) => {
+      const page = Number(req.query.page) || 1;
+      const limit = 6;
+      const skip = (page - 1) * limit;
+
+      const users = await userCollection
+        .find()
+        .skip(skip)
+        .limit(limit)
+        .toArray();
+
+      const total = await userCollection.countDocuments();
+
+      res.send({ users, total });
     });
 
     app.post("/users", async (req, res) => {
@@ -202,21 +388,26 @@ async function run() {
     );
 
     //Admin:Approve Loan
-    app.patch("/loans/:id/approve", verifyFBToken, async (req, res) => {
-      const id = req.params.id;
+    app.patch(
+      "/loans/:id/approve",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
 
-      const updatedDoc = {
-        $set: {
-          status: "approved",
-          approvedAt: new Date(),
-        },
-      };
-      const result = await loanCollection.updateOne(
-        { _id: new ObjectId(id) },
-        updatedDoc
-      );
-      res.send(result);
-    });
+        const updatedDoc = {
+          $set: {
+            status: "approved",
+            approvedAt: new Date(),
+          },
+        };
+        const result = await loanCollection.updateOne(
+          { _id: new ObjectId(id) },
+          updatedDoc
+        );
+        res.send(result);
+      }
+    );
 
     //Admin Reject Loan
     app.patch(
@@ -240,7 +431,6 @@ async function run() {
       }
     );
 
-    // --- Loan Applications Routes ---
     app.post("/loan-applications", verifyFBToken, async (req, res) => {
       const appData = req.body;
       appData.applicationId = generateApplicationId();
@@ -265,7 +455,7 @@ async function run() {
     app.patch(
       "/loan-applications/:id/approve",
       verifyFBToken,
-      verifyAdmin,
+      verifyManager,
       async (req, res) => {
         const result = await loanAppCollection.updateOne(
           { _id: new ObjectId(req.params.id) },
@@ -278,7 +468,7 @@ async function run() {
     app.patch(
       "/loan-applications/:id/reject",
       verifyFBToken,
-      verifyAdmin,
+      verifyManager,
       async (req, res) => {
         const result = await loanAppCollection.updateOne(
           { _id: new ObjectId(req.params.id) },
@@ -324,9 +514,5 @@ app.get("/", (req, res) => {
   res.send("LoanLink Backend is Running!");
 });
 
-// TODO: Import and use your routes
-// app.use('/api/auth', require('./routes/auth'));
-// app.use('/api/loans', require('./routes/loans'));
-// app.use('/api/loan-applications', require('./routes/loanApplications'));
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
