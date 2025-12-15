@@ -222,7 +222,7 @@ async function run() {
       async (req, res) => {
         try {
           const loans = await loanCollection
-            .find({ createdBy: req.decoded_email }) 
+            .find({ createdBy: req.decoded_email })
             .sort({ createdAt: -1 })
             .toArray();
           res.send(loans);
@@ -299,13 +299,23 @@ async function run() {
 
     app.post("/users", async (req, res) => {
       const user = req.body;
-      user.role = "user";
+
+      user.role = user.role || "user";
       user.createdAt = new Date();
 
       const exist = await userCollection.findOne({ email: user.email });
+      if (exist) {
+        return res.send({
+          message: "User already exists",
+          insertedId: exist._id,
+          role: exist.role,
+        });
+      }
+
       const result = await userCollection.insertOne(user);
       res.send(result);
     });
+
     app.get("/users/:email/role", async (req, res) => {
       const email = req.params.email;
       const user = await userCollection.findOne({ email });
@@ -366,11 +376,23 @@ async function run() {
       res.send(result);
     });
 
-    app.delete("/loans/:id", verifyFBToken, verifyAdmin, async (req, res) => {
+    app.delete("/loans/:id", verifyFBToken, async (req, res) => {
+      const user = await userCollection.findOne({ email: req.decoded_email });
+      if (!user) return res.status(403).send({ message: "Forbidden" });
+
+      const loan = await loanCollection.findOne({
+        _id: new ObjectId(req.params.id),
+      });
+      if (!loan) return res.status(404).send({ message: "Loan not found" });
+
+      if (user.role !== "admin" && loan.createdBy !== req.decoded_email) {
+        return res.status(403).send({ message: "Forbidden" });
+      }
+
       const result = await loanCollection.deleteOne({
         _id: new ObjectId(req.params.id),
       });
-      res.send(result);
+      res.send({ success: true, deletedCount: result.deletedCount });
     });
 
     app.patch(
@@ -441,6 +463,30 @@ async function run() {
       const result = await loanAppCollection.insertOne(appData);
       res.send(result);
     });
+
+    //Applicant loans
+    app.get(
+      "/loan-applications/my-applications",
+      verifyFBToken,
+      async (req, res) => {
+        // The user's email is guaranteed to be in req.decoded_email
+        // because it passed the verifyFBToken middleware.
+        const userEmail = req.decoded_email;
+
+        try {
+          const userApps = await loanAppCollection
+            .find({ userEmail: userEmail })
+            .sort({ createdAt: -1 })
+            .toArray();
+          res.send(userApps);
+        } catch (error) {
+          console.error("Error fetching user applications:", error);
+          res
+            .status(500)
+            .send({ message: "Failed to fetch user applications." });
+        }
+      }
+    );
 
     app.get("/loan-applications", verifyFBToken, async (req, res) => {
       let query = {};
@@ -513,6 +559,5 @@ run().catch(console.dir);
 app.get("/", (req, res) => {
   res.send("LoanLink Backend is Running!");
 });
-
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
