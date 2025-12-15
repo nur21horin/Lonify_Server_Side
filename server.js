@@ -63,7 +63,7 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 app.post("/create-payment-intent", verifyJWT, async (req, res) => {
   const paymentIntent = await stripe.paymentIntents.create({
-    amount: 1000, // $10
+    amount: 10, // $10
     currency: "usd",
     payment_method_types: ["card"],
   });
@@ -280,8 +280,30 @@ async function run() {
         res.send(result);
       }
     );
+    app.put(
+      "/users/:uid/status",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const { role, isSuspended } = req.body;
+        const uid = req.params.uid;
+
+        const user = await userCollection.findOne({ uid });
+        if (!user) return res.status(404).send({ message: "User not found" });
+
+        const updateData = {};
+        if (role) updateData.role = role;
+        if (isSuspended !== undefined) updateData.isSuspended = isSuspended;
+
+        await userCollection.updateOne({ uid }, { $set: updateData });
+        const updatedUser = await userCollection.findOne({ uid });
+
+        res.send({ user: updatedUser });
+      }
+    );
+
     //users related APi
-    app.get("/users", verifyJWT, verifyAdmin, async (req, res) => {
+    app.get("/users", verifyFBToken, verifyAdmin, async (req, res) => {
       const page = Number(req.query.page) || 1;
       const limit = 6;
       const skip = (page - 1) * limit;
@@ -327,11 +349,18 @@ async function run() {
       verifyAdmin,
       async (req, res) => {
         const { role } = req.body;
+        const email = req.params.email;
+
+        // Update role
         const result = await userCollection.updateOne(
-          { email: req.params.email },
+          { email },
           { $set: { role } }
         );
-        res.send(result);
+
+        // Fetch updated user
+        const updatedUser = await userCollection.findOne({ email });
+
+        res.send({ user: updatedUser });
       }
     );
 
@@ -341,11 +370,19 @@ async function run() {
       verifyAdmin,
       async (req, res) => {
         const { reason } = req.body;
-        const result = await userCollection.updateOne(
-          { email: req.params.email },
-          { $set: { status: "suspended", suspendReason: reason } }
+        const email = req.params.email;
+
+        const user = await userCollection.findOne({ email });
+        if (!user) return res.status(404).send({ message: "User not found" });
+
+        const updatedStatus = !user.isSuspended; // toggle suspension
+        await userCollection.updateOne(
+          { email },
+          { $set: { isSuspended: updatedStatus, suspendReason: reason || "" } }
         );
-        res.send(result);
+
+        const updatedUser = await userCollection.findOne({ email });
+        res.send({ user: updatedUser });
       }
     );
 
