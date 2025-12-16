@@ -489,7 +489,7 @@ async function run() {
         res.send(result);
       }
     );
-
+//loan application 2
     app.post("/loan-applications", verifyFBToken, async (req, res) => {
       const appData = req.body;
       appData.applicationId = generateApplicationId();
