@@ -534,7 +534,7 @@ async function run() {
         .toArray();
       res.send(apps);
     });
-
+//loan application
     app.patch(
       "/loan-applications/:id/approve",
       verifyFBToken,
