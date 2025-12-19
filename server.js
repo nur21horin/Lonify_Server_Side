@@ -13,6 +13,7 @@ const jwt = require("jsonwebtoken");
 
 //Firebase
 const admin = require("firebase-admin");
+const { title } = require("process");
 
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
@@ -22,7 +23,7 @@ admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 
-module.exports = admin;
+//module.exports = admin;
 
 const PORT = process.env.PORT || 5000;
 
@@ -191,16 +192,37 @@ async function run() {
         .find()
         .sort({ createdAt: -1 })
         .toArray();
+
+      const formattedLoans = loans.map((loan) => ({
+        id: loan._id.toString(),
+        title: loan.title,
+        description: loan.description,
+        category: loan.category,
+        image: loan.image,
+        interestRate: loan.interestRate,
+        maxLimit: loan.maxLimit,
+      }));
+
       res.send(loans);
     });
+
+
     app.get("/loans/:id", verifyFBToken, async (req, res) => {
       try {
+        const loanId = req.params.id;
+
+        if (!ObjectId.isValid(loanId)) {
+          return res.status(400).send({ message: "Invalid loan ID" });
+        }
+
         const loan = await loanCollection.findOne({
-          _id: new ObjectId(req.params.id),
+          _id: new ObjectId(loanId),
         });
         if (!loan) return res.status(404).send({ message: "Loan not found" });
+
         res.send(loan);
       } catch (error) {
+        console.error(error);
         res.status(500).send({ message: "Failed to fetch loan details" });
       }
     });
@@ -489,7 +511,7 @@ async function run() {
         res.send(result);
       }
     );
-//loan application 2
+    //loan application 2
     app.post("/loan-applications", verifyFBToken, async (req, res) => {
       const appData = req.body;
       appData.applicationId = generateApplicationId();
@@ -534,7 +556,7 @@ async function run() {
         .toArray();
       res.send(apps);
     });
-//loan application
+    //loan application
     app.patch(
       "/loan-applications/:id/approve",
       verifyFBToken,
